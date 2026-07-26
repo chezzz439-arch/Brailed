@@ -59,6 +59,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
 import android.hardware.usb.UsbManager
 import com.brailed.companion.ble.BleService
 import com.brailed.companion.capture.AudioCaptureService
@@ -68,6 +71,18 @@ import com.brailed.companion.usb.UsbSerialService
 import com.hoho.android.usbserial.driver.UsbSerialProber
 
 class MainActivity : ComponentActivity() {
+
+    // Fires when a USB device is plugged in WHILE the app is already open —
+    // the case the launch intent + onResume don't cover.
+    private val usbAttachReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+                Bus.log("USB device attached")
+                maybeStartUsb(intent)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { BrailedTheme { HomeScreen() } }
@@ -77,6 +92,20 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         maybeStartUsb(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        ContextCompat.registerReceiver(
+            this, usbAttachReceiver,
+            IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
+    override fun onStop() {
+        super.onStop()
+        runCatching { unregisterReceiver(usbAttachReceiver) }
     }
 
     override fun onResume() {
