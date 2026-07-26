@@ -79,6 +79,7 @@ class UsbSerialService : Service(), LinkSink, SerialInputOutputManager.Listener 
     // ---- Connect ----------------------------------------------------------
 
     private fun connect() {
+        if (port != null) return // already connected; onResume/restart is idempotent
         val driver = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager).firstOrNull()
         if (driver == null) { Bus.log("No USB serial device found"); return }
 

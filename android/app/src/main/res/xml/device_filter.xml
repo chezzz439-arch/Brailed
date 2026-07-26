@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Which USB devices auto-launch the app. CP2102 (Silicon Labs CP210x) on the
-     ESP32-WROOM DevKit: VID 0x10C4 = 4292, PID 0xEA60 = 60000 (decimal, as the
-     Android USB device filter requires). -->
+<!-- Which USB devices auto-launch the app. Values are DECIMAL (Android's USB
+     device filter requires decimal, not hex).
+
+     CP2102 (Silicon Labs CP210x): VID 0x10C4=4292, PID 0xEA60=60000
+     CH340  (WCH / QinHeng):       VID 0x1A86=6790, PID 0x7523=29987
+     Both are what cheap ESP32-WROOM DevKits ship with, so either board works. -->
 <resources>
     <usb-device vendor-id="4292" product-id="60000" />
+    <usb-device vendor-id="6790" product-id="29987" />
 </resources>

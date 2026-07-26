@@ -65,6 +65,7 @@ import com.brailed.companion.capture.AudioCaptureService
 import com.brailed.companion.core.Bus
 import com.brailed.companion.core.Settings
 import com.brailed.companion.usb.UsbSerialService
+import com.hoho.android.usbserial.driver.UsbSerialProber
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,10 +79,28 @@ class MainActivity : ComponentActivity() {
         maybeStartUsb(intent)
     }
 
-    /** Plugging the CP2102 in launches us with USB_DEVICE_ATTACHED (see the
-     *  manifest intent-filter). Start the wired transport in response. */
+    override fun onResume() {
+        super.onResume()
+        // Catch the common case: the device is already plugged in when the app
+        // is opened normally (no USB_DEVICE_ATTACHED launch intent). Without
+        // this, a device that was connected before launch never enumerates.
+        maybeStartUsb(null)
+    }
+
+    /**
+     * Start the wired transport when a supported serial adapter is present —
+     * either because plugging it in launched us (USB_DEVICE_ATTACHED), or
+     * because one is already connected. The default prober's device table is
+     * the source of truth (CP2102, CH340, …); if it finds a driver, connect.
+     */
     private fun maybeStartUsb(intent: Intent?) {
-        if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+        val attached = intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED
+        val present = runCatching {
+            UsbSerialProber.getDefaultProber()
+                .findAllDrivers(getSystemService(UsbManager::class.java))
+                .isNotEmpty()
+        }.getOrDefault(false)
+        if (attached || present) {
             ContextCompat.startForegroundService(this, Intent(this, UsbSerialService::class.java))
         }
     }
