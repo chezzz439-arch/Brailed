@@ -1,7 +1,9 @@
 package com.brailed.companion.a11y
 
 import android.accessibilityservice.AccessibilityService
+import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import com.brailed.companion.ble.BleService
 import com.brailed.companion.core.Bus
 
@@ -48,6 +50,45 @@ class BrailedAccessibilityService : AccessibilityService() {
     fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
     fun goBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
     fun openNotifications(): Boolean = performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+
+    // ---- Text injection (used when the Brailed keyboard isn't active) ------
+    // The master prompt (§10/§11) names an AccessibilityService as Android's
+    // text-injection mechanism. We drive the focused editable node with
+    // ACTION_SET_TEXT, replacing its content with the new full string.
+
+    /** Append [text] to the focused editable field. Returns false if none. */
+    fun injectText(text: String): Boolean = withFocusedEditable { node ->
+        setNodeText(node, (node.text?.toString() ?: "") + text)
+    }
+
+    /** Delete the last character of the focused editable field. */
+    fun deleteLastChar(): Boolean = withFocusedEditable { node ->
+        val current = node.text?.toString() ?: ""
+        if (current.isEmpty()) true else setNodeText(node, current.dropLast(1))
+    }
+
+    private inline fun withFocusedEditable(block: (AccessibilityNodeInfo) -> Boolean): Boolean {
+        val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        return try {
+            if (!node.isEditable) false else block(node)
+        } finally {
+            @Suppress("DEPRECATION") node.recycle()
+        }
+    }
+
+    private fun setNodeText(node: AccessibilityNodeInfo, newText: String): Boolean {
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
+        }
+        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        // Keep the caret at the end so the next character appends correctly.
+        val sel = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newText.length)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newText.length)
+        }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
+        return ok
+    }
 
     companion object {
         @Volatile

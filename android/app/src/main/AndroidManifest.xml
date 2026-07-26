@@ -20,6 +20,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Live captioning of the phone's own audio (playback capture). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
     <application
@@ -45,6 +49,12 @@
             android:name=".ble.BleService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Captures the phone's playback audio for live captions. -->
+        <service
+            android:name=".capture.AudioCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <!-- Custom keyboard: types decoded braille into the focused field. -->
         <service

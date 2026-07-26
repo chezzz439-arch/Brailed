@@ -1,7 +1,9 @@
 package com.brailed.companion
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings as AndroidSettings
@@ -36,6 +38,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.brailed.companion.ble.BleService
+import com.brailed.companion.capture.AudioCaptureService
 import com.brailed.companion.core.Bus
 import com.brailed.companion.core.Settings
 
@@ -61,6 +64,7 @@ private fun requiredPermissions(): Array<String> = buildList {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         add(Manifest.permission.POST_NOTIFICATIONS)
     }
+    add(Manifest.permission.RECORD_AUDIO) // for playback-capture captions
 }.toTypedArray()
 
 @Composable
@@ -74,6 +78,19 @@ private fun HomeScreen() {
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { /* result handled implicitly; user can retry */ }
+
+    // MediaProjection consent → start audio capture with the granted token.
+    val projectionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val intent = Intent(context, AudioCaptureService::class.java).apply {
+                putExtra(AudioCaptureService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(AudioCaptureService.EXTRA_RESULT_DATA, result.data)
+            }
+            ContextCompat.startForegroundService(context, intent)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -93,7 +110,7 @@ private fun HomeScreen() {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("1. Connect to the device", style = MaterialTheme.typography.titleSmall)
                 Button(onClick = { permLauncher.launch(requiredPermissions()) }, Modifier.fillMaxWidth()) {
-                    Text("Grant Bluetooth permissions")
+                    Text("Grant permissions (Bluetooth + mic)")
                 }
                 Button(
                     onClick = {
@@ -145,6 +162,28 @@ private fun HomeScreen() {
                 Button(onClick = { settings.agentBaseUrl = agentUrl }, Modifier.fillMaxWidth()) {
                     Text("Save")
                 }
+            }
+        }
+
+        // 4. Live captions from phone audio
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("4. Live captions (phone audio)", style = MaterialTheme.typography.titleSmall)
+                Button(
+                    onClick = {
+                        val mpm = context.getSystemService(MediaProjectionManager::class.java)
+                        projectionLauncher.launch(mpm.createScreenCaptureIntent())
+                    },
+                    Modifier.fillMaxWidth()
+                ) { Text("Start live captions") }
+                OutlinedButton(
+                    onClick = { context.stopService(Intent(context, AudioCaptureService::class.java)) },
+                    Modifier.fillMaxWidth()
+                ) { Text("Stop captions") }
+                Text(
+                    "Captions media/video audio (Android 10+). Call audio usually can't be captured, and speech-to-text is a stub — see android/README.md.",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
 

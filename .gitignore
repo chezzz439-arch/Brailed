@@ -12,5 +12,8 @@ __jac_gen__/
 # Secrets
 .env
 
+# IDE
+.idea/
+
 # OS
 .DS_Store

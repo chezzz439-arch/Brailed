@@ -17,8 +17,10 @@ import android.bluetooth.le.ScanSettings
 import android.content.Intent
 import android.os.IBinder
 import android.os.ParcelUuid
+import android.provider.Settings as AndroidSettings
 import androidx.core.app.NotificationCompat
 import com.brailed.companion.BrailedApp
+import com.brailed.companion.a11y.BrailedAccessibilityService
 import com.brailed.companion.agent.AgentClient
 import com.brailed.companion.command.CommandExecutor
 import com.brailed.companion.core.Bus
@@ -56,7 +58,9 @@ class BleService : Service() {
     private val commandBuffer = StringBuilder()
 
     // Serial GATT write queue (BLE allows one outstanding write at a time).
-    private val writeQueue = ArrayDeque<ByteArray>()
+    // Each entry carries its target characteristic so captions and command
+    // results can share the one queue while going to different characteristics.
+    private val writeQueue = ArrayDeque<Pair<BluetoothGattCharacteristic, ByteArray>>()
     private var writing = false
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -200,7 +204,7 @@ class BleService : Service() {
                 if (msg.mode == Mode.COMMAND) {
                     commandBuffer.append(msg.ch)
                 } else {
-                    scope.launch { Bus.emitChar(msg.ch) }
+                    routeTextChar(msg.ch)
                 }
             }
 
@@ -216,7 +220,7 @@ class BleService : Service() {
                     if (currentMode == Mode.COMMAND) {
                         if (commandBuffer.isNotEmpty()) commandBuffer.setLength(commandBuffer.length - 1)
                     } else {
-                        scope.launch { Bus.emitControl(Control.BACKSPACE) }
+                        routeTextBackspace()
                     }
                 }
 
@@ -225,13 +229,46 @@ class BleService : Service() {
                         dispatchCommand(commandBuffer.toString().trim())
                         commandBuffer.setLength(0)
                     } else {
-                        scope.launch { Bus.emitChar('\n') }
+                        routeTextSend()
                     }
                 }
             }
 
             is DeviceMessage.Unknown -> Bus.log("Unparsed: ${msg.raw}")
         }
+    }
+
+    // ---- Text-mode injection strategy -------------------------------------
+    // Preferred path is the Brailed keyboard (IME) when it is the active input
+    // method. When it isn't, we fall back to the AccessibilityService's
+    // ACTION_SET_TEXT path (the mechanism named in the master prompt §10/§11),
+    // so typing still works without forcing a keyboard switch.
+
+    private fun brailedImeIsActive(): Boolean {
+        val current = AndroidSettings.Secure.getString(
+            contentResolver, AndroidSettings.Secure.DEFAULT_INPUT_METHOD
+        )
+        return current?.startsWith(packageName) == true
+    }
+
+    private fun routeTextChar(c: Char) {
+        if (brailedImeIsActive()) {
+            scope.launch { Bus.emitChar(c) }
+        } else if (BrailedAccessibilityService.instance?.injectText(c.toString()) != true) {
+            Bus.log("No input target — enable the Brailed keyboard or accessibility service")
+        }
+    }
+
+    private fun routeTextBackspace() {
+        if (brailedImeIsActive()) scope.launch { Bus.emitControl(Control.BACKSPACE) }
+        else BrailedAccessibilityService.instance?.deleteLastChar()
+    }
+
+    private fun routeTextSend() {
+        // IME turns this into the field's editor action (Enter/Done/Send);
+        // the accessibility fallback just appends a newline.
+        if (brailedImeIsActive()) scope.launch { Bus.emitControl(Control.SEND) }
+        else BrailedAccessibilityService.instance?.injectText("\n")
     }
 
     private fun dispatchCommand(instruction: String) {
@@ -241,37 +278,40 @@ class BleService : Service() {
             val action = runCatching { AgentClient.runCommand(settings.agentBaseUrl, instruction) }
                 .getOrElse {
                     Bus.log("Agent error: ${it.message}")
-                    sendCaption("Command failed: ${it.message}")
+                    sendCommandResult("Command failed: ${it.message}")
                     return@launch
                 }
             Bus.log("Action: ${action.type} ${action.appName} ${action.target}".trim())
             val result = CommandExecutor.execute(this@BleService, action)
-            sendCaption(result)
+            sendCommandResult(result)
         }
     }
 
     // ---- Caption / result write-back --------------------------------------
 
-    /** Send a line back to the device's CaptionOutput characteristic. */
-    @SuppressLint("MissingPermission")
-    fun sendCaption(text: String) {
-        val char = captionChar ?: return
+    /** Live caption text (what the phone is saying) → CaptionOutput. */
+    fun sendCaption(text: String) = enqueueWrite(captionChar, text)
+
+    /** Short command confirmation/error → CommandResult (master prompt §8). */
+    fun sendCommandResult(text: String) = enqueueWrite(commandResultChar, text)
+
+    private fun enqueueWrite(target: BluetoothGattCharacteristic?, text: String) {
+        val char = target ?: return
         // Chunk into <=20 byte payloads (default ATT MTU) and queue them.
         text.toByteArray().toList().chunked(20).forEach { chunk ->
-            writeQueue.add(chunk.toByteArray())
+            writeQueue.add(char to chunk.toByteArray())
         }
-        drainWriteQueue(char)
+        drainWriteQueue()
     }
 
     @SuppressLint("MissingPermission")
-    private fun drainWriteQueue(target: BluetoothGattCharacteristic? = captionChar) {
+    private fun drainWriteQueue() {
         if (writing) return
-        val char = target ?: return
-        val next = writeQueue.poll() ?: return
+        val (char, bytes) = writeQueue.poll() ?: return
         writing = true
         @Suppress("DEPRECATION")
         run {
-            char.value = next
+            char.value = bytes
             gatt?.writeCharacteristic(char)
         }
     }

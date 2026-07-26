@@ -20,13 +20,14 @@ Requires the **Android SDK** (compileSdk 34) and a **real device** — BLE does 
 
 ## First-run setup (in the app)
 
-The main screen walks through three steps:
+The main screen walks through four steps:
 
-1. **Grant Bluetooth permissions**, then **Start / scan for device** (connects to `PortableBraille`).
+1. **Grant permissions (Bluetooth + mic)**, then **Start / scan for device** (connects to `PortableBraille`).
 2. **Enable the OS integrations:**
-   - *Enable Brailed keyboard* → toggle it on in Settings, then *Switch to Brailed keyboard* to make it active. Text you chord on the device now types into whatever field has focus.
-   - *Enable captions & control (accessibility)* → turn on the Brailed accessibility service. This powers screen captions back to the device and the `GO_HOME` / `READ_NOTIFICATIONS` commands.
+   - *Enable Brailed keyboard* → toggle it on in Settings, then *Switch to Brailed keyboard* to make it active. Text you chord on the device now types into whatever field has focus. **This is the preferred text path;** if the Brailed keyboard isn't the active one, the accessibility service injects text instead (see below).
+   - *Enable captions & control (accessibility)* → turn on the Brailed accessibility service. This powers the `GO_HOME` / `READ_NOTIFICATIONS` commands and the text-injection fallback.
 3. **Set the Jac agent URL** to the machine running `jac start jac_backend/agent.jac` (e.g. `http://192.168.1.42:8000` on the same Wi-Fi), and Save.
+4. **Start live captions** → grants a screen/audio-capture consent and begins captioning phone audio (see limits below).
 
 ## How the modes map to the firmware protocol
 
@@ -43,18 +44,30 @@ The firmware emits, over the TextInput BLE characteristic:
 
 | File | Role |
 | --- | --- |
-| `ble/BleService.kt` | Foreground service; scans, connects, subscribes, routes messages, dispatches commands, writes captions back. |
+| `ble/BleService.kt` | Foreground service; scans, connects, subscribes, routes text vs command, dispatches commands, writes captions → `CaptionOutput` and command results → `CommandResult`. Chooses IME vs accessibility for text injection. |
 | `ble/BrailedProtocol.kt` | Parses the `CHAR:`/`CTRL:` wire format. |
-| `ime/BrailleInputMethodService.kt` | The keyboard — commits characters from the bus into the focused field. |
-| `a11y/BrailedAccessibilityService.kt` | Captions on-screen text to the device; global home/back/notifications actions. |
+| `ime/BrailleInputMethodService.kt` | The keyboard — commits characters; Send triggers the field's editor action (`performEditorAction`, Enter fallback). |
+| `a11y/BrailedAccessibilityService.kt` | Screen-text captions + global home/back/notifications, and the `ACTION_SET_TEXT` injection fallback. |
+| `capture/AudioCaptureService.kt` | MediaProjection playback capture → PCM → `Transcriber` → `CaptionOutput`. |
+| `capture/Transcriber.kt` | STT seam; bundled `StubTranscriber` does voice-activity detection only (no transcript). |
 | `agent/AgentClient.kt` + `agent/Action.kt` | POSTs to `run_command`, decodes the `Action`. |
 | `command/CommandExecutor.kt` | `Action` → Intent / accessibility action, with an app allow-list. |
 | `core/Bus.kt`, `core/Settings.kt` | In-process event bus and the agent-URL preference. |
 | `MainActivity.kt` | Setup UI, permissions, status, activity log. |
 
+## Captions: two sources, and the hard limit
+
+The device gets caption text back over `CaptionOutput` from two places:
+
+1. **Phone audio** (`AudioCaptureService`) — the master-prompt capability #2. Uses `MediaProjection` + `AudioPlaybackCapture` (Android 10+) to grab the phone's *playback* audio and run it through a `Transcriber`.
+   - **Speech-to-text is a stub.** `StubTranscriber` only detects that audio is playing/stopped — it does **not** produce a transcript. Plug in Vosk, whisper.cpp, or a cloud STT at the `Transcriber` seam (documented in `Transcriber.kt`).
+   - **Call audio generally can't be captured.** Apps set their audio to disallow capture, and telephony is exempt, so captioning an actual phone call this way usually yields silence. This is an OS limitation, not a bug — the master prompt (§10) flags it as the design's riskiest assumption.
+2. **On-screen text** (`BrailedAccessibilityService`) — announcements and window text, as a lighter always-on complement.
+
 ## Not done yet / caveats
 
 - **Not compile-tested** — written without an Android SDK available. Open in Android Studio and expect to fix minor version/import nits on first sync.
+- **No real speech-to-text** — see the caption stub above; it's the one substantive TODO.
 - Deprecated BLE `writeCharacteristic(value)` / `writeDescriptor(value)` calls are used for min-SDK-26 compatibility; fine, but Studio will flag them.
 - The app allow-list in `CommandExecutor` only knows Instagram, Messages, Settings, Camera, Phone — matching the agent's `KNOWN_APPS`. Add packages there to support more.
-- Caption throttling is naive (drops exact repeats only); a real build would debounce and filter noisier event types.
+- Caption throttling is naive (screen-text drops exact repeats only); a real build would debounce and filter noisier event types.

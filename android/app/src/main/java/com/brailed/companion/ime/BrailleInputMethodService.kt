@@ -2,7 +2,9 @@ package com.brailed.companion.ime
 
 import android.inputmethodservice.InputMethodService
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.TextView
 import com.brailed.companion.core.Bus
 import com.brailed.companion.core.Control
@@ -32,13 +34,32 @@ class BrailleInputMethodService : InputMethodService() {
                 currentInputConnection?.commitText(c.toString(), 1)
             }
         }
-        // Handle text-mode backspace.
+        // Handle text-mode control events.
         scope.launch {
             Bus.control.collect { control ->
-                if (control == Control.BACKSPACE) {
-                    currentInputConnection?.deleteSurroundingText(1, 0)
+                when (control) {
+                    Control.BACKSPACE -> currentInputConnection?.deleteSurroundingText(1, 0)
+                    Control.SEND -> submit()
+                    Control.MODE_TOGGLE -> Unit // handled in the BLE service
                 }
             }
+        }
+    }
+
+    /**
+     * Send/Enter. Prefer the field's declared editor action (Send/Go/Done/Search)
+     * so composer fields actually submit; fall back to an Enter key event when
+     * the field declares none.
+     */
+    private fun submit() {
+        val ic = currentInputConnection ?: return
+        val action = currentInputEditorInfo?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
+            ?: EditorInfo.IME_ACTION_UNSPECIFIED
+        if (action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) {
+            ic.performEditorAction(action)
+        } else {
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
         }
     }
 
