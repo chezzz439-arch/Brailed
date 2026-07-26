@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Input-method metadata. Input is fed from the BLE device, not an on-screen
+     layout, so a single generic keyboard subtype is enough. -->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android">
+    <subtype
+        android:label="@string/ime_label"
+        android:imeSubtypeMode="keyboard" />
+</input-method>

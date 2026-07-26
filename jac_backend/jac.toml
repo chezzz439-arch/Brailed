@@ -1,0 +1,8 @@
+[project]
+name = "portable-braille-agent"
+version = "0.1.0"
+description = "Agentic command interpretation backend for the Portable Braille device"
+entry-point = "agent.jac"
+kind = "api-service"
+
+[dependencies]

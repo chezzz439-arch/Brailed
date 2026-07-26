@@ -1,0 +1,4 @@
+<resources>
+    <!-- Material3 DayNight base theme; Compose supplies the real UI colors. -->
+    <style name="Theme.Brailed" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

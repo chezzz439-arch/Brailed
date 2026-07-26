@@ -1,0 +1,16 @@
+# Python / Jac
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+__jac_gen__/
+.jac_mypy_cache/
+# jaclang bytecode cache + per-module .db files
+.jac/
+
+# Secrets
+.env
+
+# OS
+.DS_Store
