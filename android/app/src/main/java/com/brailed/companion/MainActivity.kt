@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.brailed.companion.ble.BleService
@@ -112,7 +113,21 @@ private fun requiredPermissions(): Array<String> = buildList {
     add(Manifest.permission.RECORD_AUDIO) // for playback-capture captions
 }.toTypedArray()
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** The button actions, hoisted so [HomeContent] stays stateless and previewable. */
+private class HomeActions(
+    val onGrantPermissions: () -> Unit = {},
+    val onStartScan: () -> Unit = {},
+    val onStop: () -> Unit = {},
+    val onEnableKeyboard: () -> Unit = {},
+    val onSwitchKeyboard: () -> Unit = {},
+    val onEnableAccessibility: () -> Unit = {},
+    val onSaveAgentUrl: () -> Unit = {},
+    val onStartCaptions: () -> Unit = {},
+    val onStopCaptions: () -> Unit = {},
+)
+
+/** Thin wiring layer: pulls live state + platform actions and hands them to
+ *  the stateless [HomeContent]. Not previewable (needs a real Activity). */
 @Composable
 private fun HomeScreen() {
     val context = LocalContext.current
@@ -137,6 +152,50 @@ private fun HomeScreen() {
         }
     }
 
+    HomeContent(
+        connected = status.connected,
+        mode = status.mode.name,
+        log = log,
+        agentUrl = agentUrl,
+        onAgentUrlChange = { agentUrl = it },
+        actions = HomeActions(
+            onGrantPermissions = { permLauncher.launch(requiredPermissions()) },
+            onStartScan = {
+                ContextCompat.startForegroundService(context, Intent(context, BleService::class.java))
+            },
+            onStop = { context.stopService(Intent(context, BleService::class.java)) },
+            onEnableKeyboard = {
+                context.startActivity(Intent(AndroidSettings.ACTION_INPUT_METHOD_SETTINGS))
+            },
+            onSwitchKeyboard = {
+                context.getSystemService(InputMethodManager::class.java).showInputMethodPicker()
+            },
+            onEnableAccessibility = {
+                context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS))
+            },
+            onSaveAgentUrl = { settings.agentBaseUrl = agentUrl },
+            onStartCaptions = {
+                val mpm = context.getSystemService(MediaProjectionManager::class.java)
+                projectionLauncher.launch(mpm.createScreenCaptureIntent())
+            },
+            onStopCaptions = {
+                context.stopService(Intent(context, AudioCaptureService::class.java))
+            },
+        ),
+    )
+}
+
+/** Stateless UI — everything it needs is passed in, so `@Preview` can render it. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeContent(
+    connected: Boolean,
+    mode: String,
+    log: List<String>,
+    agentUrl: String,
+    onAgentUrlChange: (String) -> Unit,
+    actions: HomeActions,
+) {
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(title = {
@@ -152,49 +211,34 @@ private fun HomeScreen() {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            StatusHero(connected = status.connected, mode = status.mode.name)
+            StatusHero(connected = connected, mode = mode)
 
             StepCard(1, "Connect to the device") {
-                PrimaryButton("Grant permissions") { permLauncher.launch(requiredPermissions()) }
-                PrimaryButton("Start / scan for device") {
-                    ContextCompat.startForegroundService(context, Intent(context, BleService::class.java))
-                }
-                TonalButton("Stop") {
-                    context.stopService(Intent(context, BleService::class.java))
-                }
+                PrimaryButton("Grant permissions", actions.onGrantPermissions)
+                PrimaryButton("Start / scan for device", actions.onStartScan)
+                TonalButton("Stop", actions.onStop)
             }
 
             StepCard(2, "Enable typing & control") {
-                TonalButton("Enable Brailed keyboard") {
-                    context.startActivity(Intent(AndroidSettings.ACTION_INPUT_METHOD_SETTINGS))
-                }
-                TonalButton("Switch to Brailed keyboard") {
-                    context.getSystemService(InputMethodManager::class.java).showInputMethodPicker()
-                }
-                TonalButton("Enable captions & control") {
-                    context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS))
-                }
+                TonalButton("Enable Brailed keyboard", actions.onEnableKeyboard)
+                TonalButton("Switch to Brailed keyboard", actions.onSwitchKeyboard)
+                TonalButton("Enable captions & control", actions.onEnableAccessibility)
             }
 
             StepCard(3, "Jac agent endpoint") {
                 OutlinedTextField(
                     value = agentUrl,
-                    onValueChange = { agentUrl = it },
+                    onValueChange = onAgentUrlChange,
                     label = { Text("Agent base URL") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                PrimaryButton("Save") { settings.agentBaseUrl = agentUrl }
+                PrimaryButton("Save", actions.onSaveAgentUrl)
             }
 
             StepCard(4, "Live captions (phone audio)") {
-                PrimaryButton("Start live captions") {
-                    val mpm = context.getSystemService(MediaProjectionManager::class.java)
-                    projectionLauncher.launch(mpm.createScreenCaptureIntent())
-                }
-                TonalButton("Stop captions") {
-                    context.stopService(Intent(context, AudioCaptureService::class.java))
-                }
+                PrimaryButton("Start live captions", actions.onStartCaptions)
+                TonalButton("Stop captions", actions.onStopCaptions)
                 Hint(
                     "Captions media/video audio (Android 10+). Call audio usually can't be " +
                         "captured, and speech-to-text is a stub — see android/README.md."
@@ -203,6 +247,49 @@ private fun HomeScreen() {
 
             LogCard(log)
         }
+    }
+}
+
+// ---- Previews (Android Studio: open the split/design pane) ---------------
+
+private val SAMPLE_LOG = listOf(
+    "Scanning…",
+    "Found PortableBraille, connecting…",
+    "Connected; discovering services…",
+    "Subscribed to TextInput",
+    "Mode: COMMAND",
+    "Command: \"open messages\"",
+    "Action: OPEN_APP Messages ",
+    "caption: ▶ audio playing — no speech-to-text engine configured",
+)
+
+@Preview(name = "Connected", showBackground = true, showSystemUi = true)
+@Composable
+private fun HomeContentConnectedPreview() {
+    BrailedTheme {
+        HomeContent(
+            connected = true,
+            mode = "COMMAND",
+            log = SAMPLE_LOG,
+            agentUrl = "http://192.168.1.42:8000",
+            onAgentUrlChange = {},
+            actions = HomeActions(),
+        )
+    }
+}
+
+@Preview(name = "Disconnected", showBackground = true, showSystemUi = true)
+@Composable
+private fun HomeContentDisconnectedPreview() {
+    BrailedTheme {
+        HomeContent(
+            connected = false,
+            mode = "TEXT",
+            log = emptyList(),
+            agentUrl = "http://192.168.1.100:8000",
+            onAgentUrlChange = {},
+            actions = HomeActions(),
+        )
     }
 }
 
