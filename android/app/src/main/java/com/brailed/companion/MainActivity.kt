@@ -12,29 +12,50 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.brailed.companion.ble.BleService
@@ -43,16 +64,40 @@ import com.brailed.companion.core.Bus
 import com.brailed.companion.core.Settings
 
 class MainActivity : ComponentActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) { HomeScreen() }
-            }
-        }
+        setContent { BrailedTheme { HomeScreen() } }
     }
 }
+
+// ---- Theme ---------------------------------------------------------------
+
+private val LightColors = lightColorScheme(
+    primary = Color(0xFF2E4BE0),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFDDE1FF),
+    onPrimaryContainer = Color(0xFF001259),
+    surface = Color(0xFFFDFBFF),
+    background = Color(0xFFF4F4FB),
+    surfaceVariant = Color(0xFFE3E1EC),
+)
+
+private val DarkColors = darkColorScheme(
+    primary = Color(0xFFB7C3FF),
+    onPrimary = Color(0xFF06218C),
+    primaryContainer = Color(0xFF2439A6),
+    onPrimaryContainer = Color(0xFFDDE1FF),
+)
+
+@Composable
+private fun BrailedTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
+        content = content,
+    )
+}
+
+// ---- Screen --------------------------------------------------------------
 
 private fun requiredPermissions(): Array<String> = buildList {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -67,6 +112,7 @@ private fun requiredPermissions(): Array<String> = buildList {
     add(Manifest.permission.RECORD_AUDIO) // for playback-capture captions
 }.toTypedArray()
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeScreen() {
     val context = LocalContext.current
@@ -77,9 +123,8 @@ private fun HomeScreen() {
 
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* result handled implicitly; user can retry */ }
+    ) { /* user can retry from the same button */ }
 
-    // MediaProjection consent → start audio capture with the granted token.
     val projectionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -92,111 +137,198 @@ private fun HomeScreen() {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text("Brailed", style = MaterialTheme.typography.headlineMedium)
-        Text(
-            if (status.connected) "● Connected — mode: ${status.mode}" else "○ Not connected",
-            style = MaterialTheme.typography.titleMedium
-        )
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(title = {
+                Text("Brailed", fontWeight = FontWeight.SemiBold)
+            })
+        }
+    ) { pad ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(pad)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            StatusHero(connected = status.connected, mode = status.mode.name)
 
-        // 1. Permissions + connection
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("1. Connect to the device", style = MaterialTheme.typography.titleSmall)
-                Button(onClick = { permLauncher.launch(requiredPermissions()) }, Modifier.fillMaxWidth()) {
-                    Text("Grant permissions (Bluetooth + mic)")
+            StepCard(1, "Connect to the device") {
+                PrimaryButton("Grant permissions") { permLauncher.launch(requiredPermissions()) }
+                PrimaryButton("Start / scan for device") {
+                    ContextCompat.startForegroundService(context, Intent(context, BleService::class.java))
                 }
-                Button(
-                    onClick = {
-                        val intent = Intent(context, BleService::class.java)
-                        ContextCompat.startForegroundService(context, intent)
-                    },
-                    Modifier.fillMaxWidth()
-                ) { Text("Start / scan for device") }
-                OutlinedButton(
-                    onClick = { context.stopService(Intent(context, BleService::class.java)) },
-                    Modifier.fillMaxWidth()
-                ) { Text("Stop") }
+                TonalButton("Stop") {
+                    context.stopService(Intent(context, BleService::class.java))
+                }
             }
-        }
 
-        // 2. Enable the keyboard + captions
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("2. Enable the OS integrations", style = MaterialTheme.typography.titleSmall)
-                OutlinedButton(
-                    onClick = { context.startActivity(Intent(AndroidSettings.ACTION_INPUT_METHOD_SETTINGS)) },
-                    Modifier.fillMaxWidth()
-                ) { Text("Enable Brailed keyboard") }
-                OutlinedButton(
-                    onClick = {
-                        context.getSystemService(InputMethodManager::class.java)
-                            .showInputMethodPicker()
-                    },
-                    Modifier.fillMaxWidth()
-                ) { Text("Switch to Brailed keyboard") }
-                OutlinedButton(
-                    onClick = { context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS)) },
-                    Modifier.fillMaxWidth()
-                ) { Text("Enable captions & control (accessibility)") }
+            StepCard(2, "Enable typing & control") {
+                TonalButton("Enable Brailed keyboard") {
+                    context.startActivity(Intent(AndroidSettings.ACTION_INPUT_METHOD_SETTINGS))
+                }
+                TonalButton("Switch to Brailed keyboard") {
+                    context.getSystemService(InputMethodManager::class.java).showInputMethodPicker()
+                }
+                TonalButton("Enable captions & control") {
+                    context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
             }
-        }
 
-        // 3. Agent endpoint
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("3. Jac agent endpoint", style = MaterialTheme.typography.titleSmall)
+            StepCard(3, "Jac agent endpoint") {
                 OutlinedTextField(
                     value = agentUrl,
                     onValueChange = { agentUrl = it },
                     label = { Text("Agent base URL") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
                 )
-                Button(onClick = { settings.agentBaseUrl = agentUrl }, Modifier.fillMaxWidth()) {
-                    Text("Save")
+                PrimaryButton("Save") { settings.agentBaseUrl = agentUrl }
+            }
+
+            StepCard(4, "Live captions (phone audio)") {
+                PrimaryButton("Start live captions") {
+                    val mpm = context.getSystemService(MediaProjectionManager::class.java)
+                    projectionLauncher.launch(mpm.createScreenCaptureIntent())
                 }
-            }
-        }
-
-        // 4. Live captions from phone audio
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("4. Live captions (phone audio)", style = MaterialTheme.typography.titleSmall)
-                Button(
-                    onClick = {
-                        val mpm = context.getSystemService(MediaProjectionManager::class.java)
-                        projectionLauncher.launch(mpm.createScreenCaptureIntent())
-                    },
-                    Modifier.fillMaxWidth()
-                ) { Text("Start live captions") }
-                OutlinedButton(
-                    onClick = { context.stopService(Intent(context, AudioCaptureService::class.java)) },
-                    Modifier.fillMaxWidth()
-                ) { Text("Stop captions") }
-                Text(
-                    "Captions media/video audio (Android 10+). Call audio usually can't be captured, and speech-to-text is a stub — see android/README.md.",
-                    style = MaterialTheme.typography.bodySmall
+                TonalButton("Stop captions") {
+                    context.stopService(Intent(context, AudioCaptureService::class.java))
+                }
+                Hint(
+                    "Captions media/video audio (Android 10+). Call audio usually can't be " +
+                        "captured, and speech-to-text is a stub — see android/README.md."
                 )
             }
-        }
 
-        // Activity log
-        Text("Activity", style = MaterialTheme.typography.titleSmall)
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp)) {
-                if (log.isEmpty()) {
-                    Text("Nothing yet.", style = MaterialTheme.typography.bodySmall)
-                } else {
-                    log.takeLast(40).reversed().forEach {
-                        Text(it, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-                    }
+            LogCard(log)
+        }
+    }
+}
+
+// ---- Components ----------------------------------------------------------
+
+@Composable
+private fun StatusHero(connected: Boolean, mode: String) {
+    val cs = MaterialTheme.colorScheme
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (connected) cs.primaryContainer else cs.surfaceVariant
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                Modifier
+                    .size(14.dp)
+                    .clip(CircleShape)
+                    .background(if (connected) Color(0xFF1E8E3E) else Color(0xFF9AA0A6))
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (connected) "Connected" else "Not connected",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    if (connected) "Braille device ready" else "Start scanning to connect your device",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            if (connected) Pill(mode)
+        }
+    }
+}
+
+@Composable
+private fun Pill(text: String) {
+    Surface(color = MaterialTheme.colorScheme.primary, shape = RoundedCornerShape(50)) {
+        Text(
+            text,
+            color = MaterialTheme.colorScheme.onPrimary,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+        )
+    }
+}
+
+@Composable
+private fun StepCard(number: Int, title: String, content: @Composable ColumnScope.() -> Unit) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "$number",
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun PrimaryButton(text: String, onClick: () -> Unit) {
+    Button(onClick = onClick, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        Text(text, style = MaterialTheme.typography.titleSmall)
+    }
+}
+
+@Composable
+private fun TonalButton(text: String, onClick: () -> Unit) {
+    FilledTonalButton(onClick = onClick, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        Text(text, style = MaterialTheme.typography.titleSmall)
+    }
+}
+
+@Composable
+private fun Hint(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun LogCard(log: List<String>) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("Activity", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            HorizontalDivider()
+            if (log.isEmpty()) {
+                Hint("Nothing yet — connect the device to see input and commands here.")
+            } else {
+                log.takeLast(40).reversed().forEach {
+                    Text(
+                        it,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
         }
