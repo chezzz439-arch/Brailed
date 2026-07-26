@@ -1,5 +1,6 @@
 package com.brailed.companion.core
 
+import android.util.Log
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -40,6 +41,7 @@ object Bus {
 
     fun log(line: String) {
         _log.value = (_log.value + line).takeLast(200)
+        Log.d("Brailed", line) // also to logcat: `adb logcat -s Brailed`
     }
 }
 
