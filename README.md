@@ -23,7 +23,7 @@ Two modes on the device, toggled by long-pressing the Send button:
 
 | Path | What it is | Status |
 | --- | --- | --- |
-| [`firmware/portable_braille.ino`](firmware/portable_braille.ino) | ESP32 firmware — 6-dot chord detection, Send/Command button, BLE text/caption/command characteristics. | Written against stable ESP32 Arduino BLE APIs; **not** compile-tested (no toolchain available). Flash and check before relying on it. |
+| [`firmware/src/main.cpp`](firmware/src/main.cpp) | ESP32 firmware (PlatformIO) — 6-dot chord detection, Send/Command button, SSD1306 OLED (status bar + word-wrapped scrolling captions), NimBLE text/caption/command characteristics. | **Compile-verified** — both envs build clean (`esp32dev_noble` 24.0% flash, `esp32dev` 48.1%). The radio-off build is **flashed and running on real hardware**; BLE-on is gated behind a power fix (see below). |
 | [`android/`](android/) | Companion app (Kotlin/Compose) — BLE + USB-serial client, braille keyboard (IME) with accessibility-injection fallback, phone-audio captions (MediaProjection → offline Vosk STT) + on-screen captions, NL command execution. | Builds — `assembleDebug` verified. Open in Android Studio — see [android/README.md](android/README.md). |
 | [`jac_backend/`](jac_backend/) | Jac + byLLM agent that turns an instruction into a typed `Action`, with a server-side app allow-list. Exposed as a REST walker. | **Verified** on jaclang 0.16.7 / byllm 0.6.19 — see [jac_backend/README.md](jac_backend/README.md). Tests pass under MockLLM; the live Claude call just needs an API key. |
 
@@ -55,8 +55,15 @@ Open `android/` in Android Studio, then follow the in-app three-step setup (Blue
 
 ## Firmware
 
-Open `firmware/portable_braille.ino` in the Arduino IDE (ESP32 board support required) and set `PIN_DOT[6]` / `PIN_SEND` to match your wiring before flashing. The wire protocol it emits over BLE is documented inline at the top of the file.
+Single PlatformIO codebase (`firmware/src/main.cpp`), two build envs toggled by `ENABLE_BLE`:
+
+```bash
+pio run -e esp32dev_noble -t upload -t monitor   # radio OFF — the stable, flashed config
+pio run -e esp32dev       -t upload -t monitor   # radio ON  — NimBLE link (needs the power fix)
+```
+
+Both compile clean. The **radio-off** env is what's flashed and running: chords decode to characters, the OLED shows the status bar + captions (fed via Serial `CAP <text>`), and the full chord → protocol → phone → Jac path is exercised with the radio off. The **radio-on** env browns out the board until a hardware fix (bulk cap + stiffer 5 V supply), so it stays gated for now. Set `PIN_*` / `OLED_ADDR` in `main.cpp` to match your wiring.
 
 ## Status
 
-The agent backend is verified end-to-end except for the live model call (needs a key). The firmware covers the input path (chord detection + BLE); OLED caption rendering is stubbed. The Android app builds (`./gradlew :app:assembleDebug` succeeds) but hasn't run on real hardware yet. Speech-to-text is real (offline Vosk; the model downloads on first caption use). Remaining gaps: the device OLED rendering firmware, and note that phone-*call* audio generally can't be captured on Android by design.
+The agent backend is verified end-to-end except for the live model call (needs a key). The firmware is compile-verified and the radio-off build runs on real hardware — chord input, the SSD1306 OLED (status bar + word-wrapped scrolling captions), and the wire protocol all implemented. The Android app builds (`./gradlew :app:assembleDebug` succeeds) but hasn't run on real hardware yet. Speech-to-text is real (offline Vosk; the model downloads on first caption use). Remaining gaps: the BLE-on firmware path is blocked on the power fix, and phone-*call* audio generally can't be captured on Android by design.

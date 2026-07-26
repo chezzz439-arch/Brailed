@@ -29,23 +29,24 @@ The main screen walks through four steps:
 3. **Set the Jac agent URL** to the machine running `jac start jac_backend/agent.jac` (e.g. `http://192.168.1.42:8000` on the same Wi-Fi), and Save.
 4. **Start live captions** → grants a screen/audio-capture consent and begins captioning phone audio (see limits below).
 
-## How the modes map to the firmware protocol
+## How device input maps to actions
 
-The firmware emits, over the TextInput BLE characteristic:
+The device sends a 3-byte `[type][mode][payload]` packet over BLE (TextInput), and the same as a `TXI …` line over USB serial. `ble/BrailedProtocol.kt` parses both into transport-agnostic messages — see [PROTOCOL.md](../PROTOCOL.md).
 
-| Message | Text mode | Command mode |
+| Packet type | Text mode | Command mode |
 | --- | --- | --- |
-| `CHAR:<mode>:<c>` | typed into the focused field (IME) | appended to the command buffer |
-| `CTRL:<mode>:BACKSPACE` | deletes one char | drops last buffered char |
-| `CTRL:<mode>:SEND` | inserts newline | POSTs buffer to the agent → executes `Action` |
-| `CTRL:<mode>:MODE_TOGGLE` | switch to command mode | switch back to text mode |
+| `CHAR` (0x01) | typed into the focused field (IME, or accessibility) | appended to the command buffer |
+| `BACKSPACE` (0x03) | deletes one char | drops last buffered char |
+| `SEND` (0x02) | editor action (submit / Enter) | POSTs buffer to the agent → executes `Action` |
+| `MODE_CHANGE` (0x04) | switch to command mode | switch back to text mode |
 
 ## Code map (`app/src/main/java/com/brailed/companion/`)
 
 | File | Role |
 | --- | --- |
-| `ble/BleService.kt` | Foreground service; scans, connects, subscribes, routes text vs command, dispatches commands, writes captions → `CaptionOutput` and command results → `CommandResult`. Chooses IME vs accessibility for text injection. |
-| `ble/BrailedProtocol.kt` | Parses the `CHAR:`/`CTRL:` wire format. |
+| `ble/BleService.kt` | Foreground service; scans, connects, subscribes, writes captions → `CaptionOutput` and command results → `CommandResult`. |
+| `usb/` + `core/LinkRouter.kt` | USB-serial transport (wired CP2102 alternative to BLE) and the router that dispatches device messages, chooses IME vs accessibility injection, and buffers/POSTs command mode. `ActiveLink` is whichever transport is connected. |
+| `ble/BrailedProtocol.kt` | Parses the binary 3-byte packet (BLE) and `TXI`/`STA` lines (USB) into transport-agnostic messages — see [PROTOCOL.md](../PROTOCOL.md). |
 | `ime/BrailleInputMethodService.kt` | The keyboard — commits characters; Send triggers the field's editor action (`performEditorAction`, Enter fallback). |
 | `a11y/BrailedAccessibilityService.kt` | Screen-text captions + global home/back/notifications, and the `ACTION_SET_TEXT` injection fallback. |
 | `capture/AudioCaptureService.kt` | MediaProjection playback capture → PCM → `Transcriber` → `CaptionOutput`. |
