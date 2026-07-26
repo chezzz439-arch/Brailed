@@ -16,13 +16,13 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.brailed.companion.BrailedApp
-import com.brailed.companion.ble.BleService
+import com.brailed.companion.core.ActiveLink
 import com.brailed.companion.core.Bus
 
 /**
  * Captures the phone's own playback audio (master prompt capability #2 / §4-B)
  * via MediaProjection + AudioPlaybackCapture, and streams recognized text to
- * the device's CaptionOutput characteristic through [BleService].
+ * the device over the active link ([ActiveLink]) — BLE or USB serial.
  *
  * IMPORTANT LIMITATIONS (Android, by design — see master prompt §10):
  *  - Requires API 29+. On older versions playback capture doesn't exist.
@@ -31,8 +31,9 @@ import com.brailed.companion.core.Bus
  *    ALLOW_CAPTURE_BY_NONE, and the telephony stack is exempt). So captioning a
  *    phone call this way will usually yield silence — that half of capability
  *    #2 isn't solvable with this API.
- *  - The actual speech-to-text is a pluggable [Transcriber]; the bundled
- *    [StubTranscriber] detects audio but does not transcribe (see that file).
+ *  - Speech-to-text is a pluggable [Transcriber]: [VoskTranscriber] (offline,
+ *    model downloaded on first use) once ready, with [StubTranscriber] as the
+ *    voice-activity fallback that runs until then / if the model can't load.
  */
 class AudioCaptureService : Service() {
 
@@ -40,9 +41,14 @@ class AudioCaptureService : Service() {
     private var record: AudioRecord? = null
     @Volatile private var capturing = false
     private var thread: Thread? = null
-    private val transcriber: Transcriber = StubTranscriber { text ->
+
+    // Starts as the voice-activity stub, then swapped for real Vosk speech-to-
+    // text once its model is ready. @Volatile so the capture thread sees it.
+    @Volatile private var transcriber: Transcriber = StubTranscriber(::emitCaption)
+
+    private fun emitCaption(text: String) {
         Bus.log("caption: $text")
-        BleService.instance?.sendCaption(text)
+        ActiveLink.sendCaption(text)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -111,6 +117,24 @@ class AudioCaptureService : Service() {
                 if (n > 0) transcriber.feed(buf, n)
             }
         }.also { it.start() }
+
+        startSpeechToText()
+    }
+
+    /** Provision the Vosk model off-thread and swap it in when ready; until then
+     *  the stub runs so the pipeline is live from the first frame. */
+    private fun startSpeechToText() {
+        Thread {
+            val dir = VoskModelProvider.ensureModel(applicationContext) ?: return@Thread
+            val vosk = runCatching { VoskTranscriber(dir.absolutePath, ::emitCaption) }
+                .getOrElse { Bus.log("Speech-to-text init failed: ${it.message}"); return@Thread }
+            if (capturing) {
+                transcriber = vosk
+                Bus.log("Speech-to-text active (Vosk)")
+            } else {
+                vosk.close() // capture already stopped while the model loaded
+            }
+        }.start()
     }
 
     override fun onDestroy() {

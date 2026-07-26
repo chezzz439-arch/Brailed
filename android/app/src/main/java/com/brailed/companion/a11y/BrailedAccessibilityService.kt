@@ -4,7 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import com.brailed.companion.ble.BleService
+import com.brailed.companion.core.ActiveLink
 import com.brailed.companion.core.Bus
 
 /**
@@ -37,7 +37,7 @@ class BrailedAccessibilityService : AccessibilityService() {
         lastCaption = text
         val caption = "[$source] $text"
         Bus.log(caption)
-        BleService.instance?.sendCaption(caption)
+        ActiveLink.sendCaption(caption)
     }
 
     override fun onInterrupt() {}

@@ -25,6 +25,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+    <!-- USB host (OTG) for the wired CP2102 transport. Not required — BLE is the
+         fallback — so phones without USB host can still install. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
         android:name=".BrailedApp"
@@ -42,11 +45,26 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Plugging the CP2102 in launches the app (Android auto-launches
+                 an activity, not a service); MainActivity then starts the USB
+                 transport. Filtered to the device by res/xml/device_filter. -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter" />
         </activity>
 
         <!-- Owns the BLE connection to the device and orchestrates command mode. -->
         <service
             android:name=".ble.BleService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Wired alternative: talks to the device over USB serial (CP2102). -->
+        <service
+            android:name=".usb.UsbSerialService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 

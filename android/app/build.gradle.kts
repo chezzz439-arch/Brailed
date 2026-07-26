@@ -49,6 +49,13 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-service:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
+    // USB-serial transport (CP2102/CP210x) — wired alternative to BLE.
+    implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
+
+    // Offline speech-to-text for live captions (Apache-2.0). The language model
+    // is downloaded at runtime (see VoskModelProvider), not bundled in the APK.
+    implementation("com.alphacephei:vosk-android:0.3.47")
+
     // Compose preview screenshot testing (renders @Preview to PNGs, no device).
     screenshotTestImplementation(platform("androidx.compose:compose-bom:2024.09.00"))
     screenshotTestImplementation("androidx.compose.ui:ui-tooling")

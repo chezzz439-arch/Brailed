@@ -49,7 +49,9 @@ The firmware emits, over the TextInput BLE characteristic:
 | `ime/BrailleInputMethodService.kt` | The keyboard — commits characters; Send triggers the field's editor action (`performEditorAction`, Enter fallback). |
 | `a11y/BrailedAccessibilityService.kt` | Screen-text captions + global home/back/notifications, and the `ACTION_SET_TEXT` injection fallback. |
 | `capture/AudioCaptureService.kt` | MediaProjection playback capture → PCM → `Transcriber` → `CaptionOutput`. |
-| `capture/Transcriber.kt` | STT seam; bundled `StubTranscriber` does voice-activity detection only (no transcript). |
+| `capture/VoskTranscriber.kt` | Offline speech-to-text (Vosk); emits final utterances. |
+| `capture/VoskModelProvider.kt` | Downloads + unpacks the Vosk model on first use (~40 MB). |
+| `capture/Transcriber.kt` | STT seam + `StubTranscriber` (voice-activity fallback until the model loads). |
 | `agent/AgentClient.kt` + `agent/Action.kt` | POSTs to `run_command`, decodes the `Action`. |
 | `command/CommandExecutor.kt` | `Action` → Intent / accessibility action, with an app allow-list. |
 | `core/Bus.kt`, `core/Settings.kt` | In-process event bus and the agent-URL preference. |
@@ -60,14 +62,13 @@ The firmware emits, over the TextInput BLE characteristic:
 The device gets caption text back over `CaptionOutput` from two places:
 
 1. **Phone audio** (`AudioCaptureService`) — the master-prompt capability #2. Uses `MediaProjection` + `AudioPlaybackCapture` (Android 10+) to grab the phone's *playback* audio and run it through a `Transcriber`.
-   - **Speech-to-text is a stub.** `StubTranscriber` only detects that audio is playing/stopped — it does **not** produce a transcript. Plug in Vosk, whisper.cpp, or a cloud STT at the `Transcriber` seam (documented in `Transcriber.kt`).
+   - **Speech-to-text is real, via Vosk** (offline, Apache-2.0). The small English model (~40 MB) is **downloaded on first use** to app storage — not bundled in the APK — so the first caption session shows "Downloading speech model…" and the voice-activity stub runs until it's ready. Swap the model in `VoskModelProvider` for a larger or different-language one.
    - **Call audio generally can't be captured.** Apps set their audio to disallow capture, and telephony is exempt, so captioning an actual phone call this way usually yields silence. This is an OS limitation, not a bug — the master prompt (§10) flags it as the design's riskiest assumption.
 2. **On-screen text** (`BrailedAccessibilityService`) — announcements and window text, as a lighter always-on complement.
 
 ## Not done yet / caveats
 
-- **Not compile-tested** — written without an Android SDK available. Open in Android Studio and expect to fix minor version/import nits on first sync.
-- **No real speech-to-text** — see the caption stub above; it's the one substantive TODO.
+- Speech-to-text quality is the small Vosk model's — fine for short commands/media, not dictation-grade. Upgrade the model in `VoskModelProvider` if needed.
 - Deprecated BLE `writeCharacteristic(value)` / `writeDescriptor(value)` calls are used for min-SDK-26 compatibility; fine, but Studio will flag them.
 - The app allow-list in `CommandExecutor` only knows Instagram, Messages, Settings, Camera, Phone — matching the agent's `KNOWN_APPS`. Add packages there to support more.
 - Caption throttling is naive (screen-text drops exact repeats only); a real build would debounce and filter noisier event types.

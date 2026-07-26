@@ -17,15 +17,12 @@ import android.bluetooth.le.ScanSettings
 import android.content.Intent
 import android.os.IBinder
 import android.os.ParcelUuid
-import android.provider.Settings as AndroidSettings
 import androidx.core.app.NotificationCompat
 import com.brailed.companion.BrailedApp
-import com.brailed.companion.a11y.BrailedAccessibilityService
-import com.brailed.companion.agent.AgentClient
-import com.brailed.companion.command.CommandExecutor
+import com.brailed.companion.core.ActiveLink
 import com.brailed.companion.core.Bus
-import com.brailed.companion.core.Control
-import com.brailed.companion.core.Mode
+import com.brailed.companion.core.LinkRouter
+import com.brailed.companion.core.LinkSink
 import com.brailed.companion.core.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,24 +41,26 @@ import java.util.UUID
  * It also exposes [sendCaption] so the accessibility service can push what's
  * on screen back to the device's CaptionOutput characteristic.
  */
-class BleService : Service() {
+class BleService : Service(), LinkSink {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var adapter: BluetoothAdapter
     private lateinit var settings: Settings
+    private lateinit var router: LinkRouter
 
     private var gatt: BluetoothGatt? = null
     private var captionChar: BluetoothGattCharacteristic? = null
     private var commandResultChar: BluetoothGattCharacteristic? = null
-
-    private var currentMode: Mode = Mode.TEXT
-    private val commandBuffer = StringBuilder()
 
     // Serial GATT write queue (BLE allows one outstanding write at a time).
     // Each entry carries its target characteristic so captions and command
     // results can share the one queue while going to different characteristics.
     private val writeQueue = ArrayDeque<Pair<BluetoothGattCharacteristic, ByteArray>>()
     private var writing = false
+
+    // NOTIFY characteristics are subscribed one at a time (BLE allows one
+    // descriptor write outstanding); onDescriptorWrite advances the queue.
+    private val subscribeQueue = ArrayDeque<BluetoothGattCharacteristic>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -70,6 +69,8 @@ class BleService : Service() {
         instance = this
         settings = Settings(this)
         adapter = getSystemService(BluetoothManager::class.java).adapter
+        router = LinkRouter(applicationContext, settings, scope, this)
+        ActiveLink.sink = this
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -82,6 +83,7 @@ class BleService : Service() {
         stopScanSafe()
         closeGatt()
         scope.cancel()
+        if (ActiveLink.sink === this) ActiveLink.sink = null
         instance = null
         super.onDestroy()
     }
@@ -173,21 +175,26 @@ class BleService : Service() {
             captionChar = service.getCharacteristic(CAPTION_OUTPUT_UUID)
             commandResultChar = service.getCharacteristic(COMMAND_RESULT_UUID)
 
-            val textInput = service.getCharacteristic(TEXT_INPUT_UUID) ?: return
-            g.setCharacteristicNotification(textInput, true)
-            @Suppress("DEPRECATION")
-            textInput.getDescriptor(CCCD_UUID)?.let { cccd ->
-                cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                g.writeDescriptor(cccd)
-            }
-            Bus.log("Subscribed to TextInput")
+            // Subscribe to both NOTIFY characteristics, one CCCD write at a time.
+            subscribeQueue.clear()
+            service.getCharacteristic(TEXT_INPUT_UUID)?.let { subscribeQueue.add(it) }
+            service.getCharacteristic(STATUS_UUID)?.let { subscribeQueue.add(it) }
+            if (subscribeQueue.isEmpty()) { Bus.log("TextInput characteristic missing"); return }
+            subscribeNext(g)
         }
 
+        @SuppressLint("MissingPermission")
         @Suppress("DEPRECATION")
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
-            if (c.uuid != TEXT_INPUT_UUID) return
-            val raw = c.value?.let { String(it) } ?: return
-            handleMessage(raw)
+            val bytes = c.value ?: return
+            when (c.uuid) {
+                TEXT_INPUT_UUID -> router.onDeviceMessage(BrailedProtocol.parse(bytes))
+                STATUS_UUID -> BrailedProtocol.parseStatus(bytes)?.let { router.onStatus(it) }
+            }
+        }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+            subscribeNext(g)  // advance to the next NOTIFY characteristic
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
@@ -196,104 +203,28 @@ class BleService : Service() {
         }
     }
 
-    // ---- Message routing --------------------------------------------------
-
-    private fun handleMessage(raw: String) {
-        when (val msg = BrailedProtocol.parse(raw)) {
-            is DeviceMessage.CharInput -> {
-                if (msg.mode == Mode.COMMAND) {
-                    commandBuffer.append(msg.ch)
-                } else {
-                    routeTextChar(msg.ch)
-                }
-            }
-
-            is DeviceMessage.ControlInput -> when (msg.control) {
-                Control.MODE_TOGGLE -> {
-                    currentMode = if (currentMode == Mode.TEXT) Mode.COMMAND else Mode.TEXT
-                    if (currentMode == Mode.TEXT) commandBuffer.setLength(0)
-                    Bus.setMode(currentMode)
-                    Bus.log("Mode: $currentMode")
-                }
-
-                Control.BACKSPACE -> {
-                    if (currentMode == Mode.COMMAND) {
-                        if (commandBuffer.isNotEmpty()) commandBuffer.setLength(commandBuffer.length - 1)
-                    } else {
-                        routeTextBackspace()
-                    }
-                }
-
-                Control.SEND -> {
-                    if (currentMode == Mode.COMMAND) {
-                        dispatchCommand(commandBuffer.toString().trim())
-                        commandBuffer.setLength(0)
-                    } else {
-                        routeTextSend()
-                    }
-                }
-            }
-
-            is DeviceMessage.Unknown -> Bus.log("Unparsed: ${msg.raw}")
+    @SuppressLint("MissingPermission")
+    private fun subscribeNext(g: BluetoothGatt) {
+        val ch = subscribeQueue.poll() ?: return
+        g.setCharacteristicNotification(ch, true)
+        @Suppress("DEPRECATION")
+        val cccd = ch.getDescriptor(CCCD_UUID)
+        if (cccd == null) { subscribeNext(g); return }  // no CCCD → skip
+        @Suppress("DEPRECATION")
+        run {
+            cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            g.writeDescriptor(cccd)
         }
+        Bus.log("Subscribed to ${ch.uuid}")
     }
 
-    // ---- Text-mode injection strategy -------------------------------------
-    // Preferred path is the Brailed keyboard (IME) when it is the active input
-    // method. When it isn't, we fall back to the AccessibilityService's
-    // ACTION_SET_TEXT path (the mechanism named in the master prompt §10/§11),
-    // so typing still works without forcing a keyboard switch.
-
-    private fun brailedImeIsActive(): Boolean {
-        val current = AndroidSettings.Secure.getString(
-            contentResolver, AndroidSettings.Secure.DEFAULT_INPUT_METHOD
-        )
-        return current?.startsWith(packageName) == true
-    }
-
-    private fun routeTextChar(c: Char) {
-        if (brailedImeIsActive()) {
-            scope.launch { Bus.emitChar(c) }
-        } else if (BrailedAccessibilityService.instance?.injectText(c.toString()) != true) {
-            Bus.log("No input target — enable the Brailed keyboard or accessibility service")
-        }
-    }
-
-    private fun routeTextBackspace() {
-        if (brailedImeIsActive()) scope.launch { Bus.emitControl(Control.BACKSPACE) }
-        else BrailedAccessibilityService.instance?.deleteLastChar()
-    }
-
-    private fun routeTextSend() {
-        // IME turns this into the field's editor action (Enter/Done/Send);
-        // the accessibility fallback just appends a newline.
-        if (brailedImeIsActive()) scope.launch { Bus.emitControl(Control.SEND) }
-        else BrailedAccessibilityService.instance?.injectText("\n")
-    }
-
-    private fun dispatchCommand(instruction: String) {
-        if (instruction.isBlank()) return
-        Bus.log("Command: \"$instruction\"")
-        scope.launch {
-            val action = runCatching { AgentClient.runCommand(settings.agentBaseUrl, instruction) }
-                .getOrElse {
-                    Bus.log("Agent error: ${it.message}")
-                    sendCommandResult("Command failed: ${it.message}")
-                    return@launch
-                }
-            Bus.log("Action: ${action.type} ${action.appName} ${action.target}".trim())
-            val result = CommandExecutor.execute(this@BleService, action)
-            sendCommandResult(result)
-        }
-    }
-
-    // ---- Caption / result write-back --------------------------------------
+    // ---- Caption / result write-back (LinkSink) ---------------------------
 
     /** Live caption text (what the phone is saying) → CaptionOutput. */
-    fun sendCaption(text: String) = enqueueWrite(captionChar, text)
+    override fun sendCaption(text: String) = enqueueWrite(captionChar, text)
 
     /** Short command confirmation/error → CommandResult (master prompt §8). */
-    fun sendCommandResult(text: String) = enqueueWrite(commandResultChar, text)
+    override fun sendCommandResult(text: String) = enqueueWrite(commandResultChar, text)
 
     private fun enqueueWrite(target: BluetoothGattCharacteristic?, text: String) {
         val char = target ?: return
@@ -332,11 +263,12 @@ class BleService : Service() {
     }
 
     companion object {
-        // Must match firmware/portable_braille.ino.
-        val SERVICE_UUID: UUID = UUID.fromString("6e400001-0000-1000-8000-00805f9b34fb")
-        val TEXT_INPUT_UUID: UUID = UUID.fromString("6e400002-0000-1000-8000-00805f9b34fb")
-        val CAPTION_OUTPUT_UUID: UUID = UUID.fromString("6e400003-0000-1000-8000-00805f9b34fb")
-        val COMMAND_RESULT_UUID: UUID = UUID.fromString("6e400004-0000-1000-8000-00805f9b34fb")
+        // Canonical Nordic base UUID — must match firmware/src/main.cpp and /PROTOCOL.md.
+        val SERVICE_UUID: UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
+        val TEXT_INPUT_UUID: UUID = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e")
+        val CAPTION_OUTPUT_UUID: UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
+        val COMMAND_RESULT_UUID: UUID = UUID.fromString("6e400004-b5a3-f393-e0a9-e50e24dcca9e")
+        val STATUS_UUID: UUID = UUID.fromString("6e400005-b5a3-f393-e0a9-e50e24dcca9e")
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         const val DEVICE_NAME = "PortableBraille"
 

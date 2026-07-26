@@ -24,7 +24,7 @@ Two modes on the device, toggled by long-pressing the Send button:
 | Path | What it is | Status |
 | --- | --- | --- |
 | [`firmware/portable_braille.ino`](firmware/portable_braille.ino) | ESP32 firmware — 6-dot chord detection, Send/Command button, BLE text/caption/command characteristics. | Written against stable ESP32 Arduino BLE APIs; **not** compile-tested (no toolchain available). Flash and check before relying on it. |
-| [`android/`](android/) | Companion app (Kotlin/Compose) — BLE client, braille keyboard (IME) with accessibility-injection fallback, phone-audio captions (MediaProjection; STT is a stub) + on-screen captions, NL command execution. | Scaffold; **not** compile-tested (no Android SDK available). Open in Android Studio — see [android/README.md](android/README.md). |
+| [`android/`](android/) | Companion app (Kotlin/Compose) — BLE + USB-serial client, braille keyboard (IME) with accessibility-injection fallback, phone-audio captions (MediaProjection → offline Vosk STT) + on-screen captions, NL command execution. | Builds — `assembleDebug` verified. Open in Android Studio — see [android/README.md](android/README.md). |
 | [`jac_backend/`](jac_backend/) | Jac + byLLM agent that turns an instruction into a typed `Action`, with a server-side app allow-list. Exposed as a REST walker. | **Verified** on jaclang 0.16.7 / byllm 0.6.19 — see [jac_backend/README.md](jac_backend/README.md). Tests pass under MockLLM; the live Claude call just needs an API key. |
 
 ## Quick start (backend)
@@ -59,4 +59,4 @@ Open `firmware/portable_braille.ino` in the Arduino IDE (ESP32 board support req
 
 ## Status
 
-The agent backend is verified end-to-end except for the live model call (needs a key). The firmware covers the input path (chord detection + BLE); OLED caption rendering is stubbed. The Android app is a complete scaffold wired to the real protocol but has not been compiled (no Android SDK in the build environment) — expect minor fix-ups on first Android Studio sync. Its one substantive gap is speech-to-text: the audio-capture pipeline is real, but the transcriber is a stub (plug in Vosk/whisper/cloud). Note phone-*call* audio generally can't be captured on Android by design.
+The agent backend is verified end-to-end except for the live model call (needs a key). The firmware covers the input path (chord detection + BLE); OLED caption rendering is stubbed. The Android app builds (`./gradlew :app:assembleDebug` succeeds) but hasn't run on real hardware yet. Speech-to-text is real (offline Vosk; the model downloads on first caption use). Remaining gaps: the device OLED rendering firmware, and note that phone-*call* audio generally can't be captured on Android by design.

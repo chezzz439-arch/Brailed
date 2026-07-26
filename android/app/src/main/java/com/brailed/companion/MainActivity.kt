@@ -59,15 +59,31 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import android.hardware.usb.UsbManager
 import com.brailed.companion.ble.BleService
 import com.brailed.companion.capture.AudioCaptureService
 import com.brailed.companion.core.Bus
 import com.brailed.companion.core.Settings
+import com.brailed.companion.usb.UsbSerialService
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { BrailedTheme { HomeScreen() } }
+        maybeStartUsb(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        maybeStartUsb(intent)
+    }
+
+    /** Plugging the CP2102 in launches us with USB_DEVICE_ATTACHED (see the
+     *  manifest intent-filter). Start the wired transport in response. */
+    private fun maybeStartUsb(intent: Intent?) {
+        if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            ContextCompat.startForegroundService(this, Intent(this, UsbSerialService::class.java))
+        }
     }
 }
 
