@@ -91,7 +91,7 @@ private val DarkColors = darkColorScheme(
 )
 
 @Composable
-private fun BrailedTheme(content: @Composable () -> Unit) {
+internal fun BrailedTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
         content = content,
@@ -114,7 +114,7 @@ private fun requiredPermissions(): Array<String> = buildList {
 }.toTypedArray()
 
 /** The button actions, hoisted so [HomeContent] stays stateless and previewable. */
-private class HomeActions(
+internal class HomeActions(
     val onGrantPermissions: () -> Unit = {},
     val onStartScan: () -> Unit = {},
     val onStop: () -> Unit = {},
@@ -188,7 +188,7 @@ private fun HomeScreen() {
 /** Stateless UI — everything it needs is passed in, so `@Preview` can render it. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HomeContent(
+internal fun HomeContent(
     connected: Boolean,
     mode: String,
     log: List<String>,

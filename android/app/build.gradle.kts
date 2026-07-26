@@ -2,11 +2,13 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.android.compose.screenshot")
 }
 
 android {
     namespace = "com.brailed.companion"
     compileSdk = 34
+    experimentalProperties["android.experimental.enableScreenshotTest"] = true
 
     defaultConfig {
         applicationId = "com.brailed.companion"
@@ -46,4 +48,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.lifecycle:lifecycle-service:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // Compose preview screenshot testing (renders @Preview to PNGs, no device).
+    screenshotTestImplementation(platform("androidx.compose:compose-bom:2024.09.00"))
+    screenshotTestImplementation("androidx.compose.ui:ui-tooling")
 }
