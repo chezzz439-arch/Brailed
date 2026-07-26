@@ -63,6 +63,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
 import android.hardware.usb.UsbManager
+import android.widget.Toast
 import com.brailed.companion.ble.BleService
 import com.brailed.companion.capture.AudioCaptureService
 import com.brailed.companion.core.Bus
@@ -177,9 +178,37 @@ private fun requiredPermissions(): Array<String> = buildList {
     add(Manifest.permission.RECORD_AUDIO) // for playback-capture captions
 }.toTypedArray()
 
+/**
+ * Explicit USB connect with loud, visible feedback (a Toast) so the outcome is
+ * never a silent "not connected". Tells you immediately whether the phone even
+ * sees the adapter — which pins the problem on the app vs the cable/OTG.
+ */
+private fun connectUsb(context: Context) {
+    val mgr = context.getSystemService(UsbManager::class.java)
+    val drivers = runCatching {
+        UsbSerialProber.getDefaultProber().findAllDrivers(mgr)
+    }.getOrDefault(emptyList())
+
+    if (drivers.isEmpty()) {
+        val total = mgr.deviceList.size
+        val msg = if (total == 0)
+            "No USB device seen at all — it's the cable/OTG adapter, not the app."
+        else
+            "$total USB device(s) seen, but none is a serial adapter."
+        Bus.log(msg)
+        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        return
+    }
+
+    Bus.log("USB serial device found — connecting…")
+    Toast.makeText(context, "USB device found — tap Allow if prompted.", Toast.LENGTH_LONG).show()
+    ContextCompat.startForegroundService(context, Intent(context, UsbSerialService::class.java))
+}
+
 /** The button actions, hoisted so [HomeContent] stays stateless and previewable. */
 internal class HomeActions(
     val onGrantPermissions: () -> Unit = {},
+    val onConnectUsb: () -> Unit = {},
     val onStartScan: () -> Unit = {},
     val onStop: () -> Unit = {},
     val onEnableKeyboard: () -> Unit = {},
@@ -224,6 +253,7 @@ private fun HomeScreen() {
         onAgentUrlChange = { agentUrl = it },
         actions = HomeActions(
             onGrantPermissions = { permLauncher.launch(requiredPermissions()) },
+            onConnectUsb = { connectUsb(context) },
             onStartScan = {
                 ContextCompat.startForegroundService(context, Intent(context, BleService::class.java))
             },
@@ -279,7 +309,8 @@ internal fun HomeContent(
 
             StepCard(1, "Connect to the device") {
                 PrimaryButton("Grant permissions", actions.onGrantPermissions)
-                PrimaryButton("Start / scan for device", actions.onStartScan)
+                PrimaryButton("Connect USB device", actions.onConnectUsb)
+                TonalButton("Scan for Bluetooth device", actions.onStartScan)
                 TonalButton("Stop", actions.onStop)
             }
 
