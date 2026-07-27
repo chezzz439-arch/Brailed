@@ -24,6 +24,16 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
+    <!-- Android 11+ package visibility: without this we can't see/launch other
+         apps (getLaunchIntentForPackage returns null). Declaring the launcher
+         intent makes all launchable apps queryable, so command mode can open them. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <!-- USB host (OTG) for the wired CP2102 transport. Not required — BLE is the
          fallback — so phones without USB host can still install. -->
