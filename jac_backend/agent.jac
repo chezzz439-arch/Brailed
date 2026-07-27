@@ -19,11 +19,14 @@ Run for real:
 
 import requests;
 import json;
+import os;
 
-# Local Llama via Ollama — no API key, runs on this machine. We call Ollama's
-# /api/chat directly with format="json": byLLM's own Ollama path was unreliable
-# (returned wrong actions + internal errors) whereas raw Ollama nails the
-# structured output. Point OLLAMA_* at any local model to swap.
+# Interpretation runs on Llama, via one of two providers (we call the chat API
+# directly with JSON output — byLLM's own path was unreliable here):
+#   - Groq   : if GROQ_API_KEY is set. Cloud Llama-3.3-70B — fast + accurate.
+#   - Ollama : otherwise. Local llama3.1:8b — free/offline, less consistent.
+glob GROQ_URL: str = "https://api.groq.com/openai/v1/chat/completions";
+glob GROQ_MODEL: str = "llama-3.3-70b-versatile";
 glob OLLAMA_URL: str = "http://localhost:11434/api/chat";
 glob OLLAMA_MODEL: str = "llama3.1:8b";
 glob SYSTEM_PROMPT: str =
@@ -53,20 +56,40 @@ sem Action.app_name = "The app to open, if type is OPEN_APP (e.g. 'Instagram', '
 sem Action.target = "A specific screen/section within the app, if the user mentioned one (e.g. 'home page', 'profile', 'camera'). Empty string if not specified.";
 
 def interpret_command(instruction: str) -> Action {
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": instruction}
-        ],
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0.0}
-    };
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": instruction}
+    ];
     data = {};
     try {
-        resp = requests.post(OLLAMA_URL, json=payload, timeout=30);
-        data = json.loads(resp.json()["message"]["content"]);
+        groq_key = os.getenv("GROQ_API_KEY", "");
+        if groq_key {
+            resp = requests.post(
+                GROQ_URL,
+                headers={"Authorization": f"Bearer {groq_key}"},
+                json={
+                    "model": GROQ_MODEL,
+                    "messages": messages,
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"}
+                },
+                timeout=30
+            );
+            data = json.loads(resp.json()["choices"][0]["message"]["content"]);
+        } else {
+            resp = requests.post(
+                OLLAMA_URL,
+                json={
+                    "model": OLLAMA_MODEL,
+                    "messages": messages,
+                    "stream": False,
+                    "format": "json",
+                    "options": {"temperature": 0.0}
+                },
+                timeout=30
+            );
+            data = json.loads(resp.json()["message"]["content"]);
+        }
     } except Exception as e {
         return Action(type=ActionType.UNKNOWN, target=f"LLM error: {e}");
     }
