@@ -121,6 +121,7 @@ static void     updateSendButton();
 static void     handleSerialInput();
 static void     initOLED();
 static void     renderOLED();
+static void     renderIdle(uint32_t frame);
 static void     pushCaption(const String& chunk);
 static void     showTransient(const String& msg);
 #if ENABLE_BLE
@@ -152,6 +153,14 @@ static String captionBuf;                 // rolling caption text (bounded)
 static String transientMsg;
 static unsigned long transientUntil = 0;
 static volatile bool oledDirty = false;   // BLE task defers rendering to loop()
+
+// Idle splash: after IDLE_TIMEOUT_MS with no OLED activity, show the animated
+// "BRAILED" logo screen, advancing one frame every IDLE_FRAME_MS.
+static const unsigned long IDLE_TIMEOUT_MS = 5000;
+static const unsigned long IDLE_FRAME_MS   = 100;
+static unsigned long lastActivityMs = 0;   // set whenever renderOLED() runs
+static unsigned long lastIdleDraw   = 0;
+static uint32_t      idleFrame      = 0;
 
 // ---------------------------------------------------------------------------
 // Braille lookup (Grade 1). Index = bitmask, value = lowercase letter, 0 = none.
@@ -419,7 +428,9 @@ static void wrapInto(const String& text, int maxChars, std::vector<String>& out)
 
 static void renderOLED() {
   if (!oledOk) return;
+  lastActivityMs = millis();   // real content on screen -> not idle
   display.clearDisplay();
+  display.setTextSize(1);
 
   // Status bar (row 0): mode | BLE state | pending capital/number flags
   display.setCursor(0, 0);
@@ -456,6 +467,64 @@ static void renderOLED() {
       y += 8;
     }
   }
+  display.display();
+}
+
+// ---------------------------------------------------------------------------
+// Idle splash — "BRAILED" name + a big braille cell that types the word on a
+// loop, plus a blinking caret. The animation IS braille: the 2x3 cell morphs
+// through b-r-a-i-l-e-d so the emblem doubles as a live demo of the alphabet.
+// ---------------------------------------------------------------------------
+static uint8_t idleMaskFor(char c) {
+  // 6-bit dot mask, bit0=dot1 .. bit5=dot6 (matches decodeLetter's encoding).
+  switch (c) {
+    case 'b': return 0b000011;  // 1-2
+    case 'r': return 0b010111;  // 1-2-3-5
+    case 'a': return 0b000001;  // 1
+    case 'i': return 0b001010;  // 2-4
+    case 'l': return 0b000111;  // 1-2-3
+    case 'e': return 0b010001;  // 1-5
+    case 'd': return 0b011001;  // 1-4-5
+    default:  return 0;
+  }
+}
+
+static void renderIdle(uint32_t frame) {
+  if (!oledOk) return;
+  display.clearDisplay();
+
+  // Title: "BRAILED" centered near the top (size 2 ~ 12px advance/char).
+  const char* title = "BRAILED";
+  int titleW = (int)strlen(title) * 12;
+  display.setTextSize(2);
+  display.setCursor((OLED_W - titleW) / 2, 2);
+  display.print(title);
+
+  // Which letter is being "typed": ~600ms each (+ one blank), looping.
+  const char* word = "brailed";
+  int n = (int)strlen(word);
+  int step = (int)((frame / 6) % (uint32_t)(n + 1));
+  uint8_t mask = (step < n) ? idleMaskFor(word[step]) : 0;
+
+  // Braille cell (2 cols x 3 rows) + the current uppercase letter, as a group.
+  const int r = 4, gx = 14, gy = 12;
+  int cellX = 40, cellY = 28;                       // top-left dot centre
+  int xs[6] = {cellX, cellX, cellX, cellX + gx, cellX + gx, cellX + gx};
+  int ys[6] = {cellY, cellY + gy, cellY + 2 * gy, cellY, cellY + gy, cellY + 2 * gy};
+  for (int i = 0; i < 6; i++) {
+    if (mask & (1 << i)) display.fillCircle(xs[i], ys[i], r, SSD1306_WHITE);
+    else                 display.drawCircle(xs[i], ys[i], r, SSD1306_WHITE);
+  }
+  if (step < n) {
+    display.setTextSize(2);
+    display.setCursor(cellX + gx + 20, cellY + gy - 6);
+    display.write((char)(word[step] - 'a' + 'A'));
+  }
+
+  // Blinking caret at the bottom centre — the "idle" heartbeat.
+  if ((frame / 3) % 2 == 0) display.fillRect(OLED_W / 2 - 1, OLED_H - 4, 3, 3, SSD1306_WHITE);
+
+  display.setTextSize(1);   // leave the display in the state renderOLED expects
   display.display();
 }
 
@@ -636,6 +705,14 @@ void loop() {
   bool showing = transientMsg.length() && (long)(transientUntil - millis()) > 0;
   if (wasShowing && !showing) renderOLED();
   wasShowing = showing;
+
+  // Idle splash: once nothing has happened for a while, play the animated
+  // BRAILED logo. Any real activity calls renderOLED(), which resets the timer.
+  bool idle = (lastActivityMs == 0) || (millis() - lastActivityMs > IDLE_TIMEOUT_MS);
+  if (idle && oledOk && millis() - lastIdleDraw >= IDLE_FRAME_MS) {
+    renderIdle(idleFrame++);
+    lastIdleDraw = millis();
+  }
 
   delay(POLL_MS);
 }
