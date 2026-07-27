@@ -106,29 +106,133 @@ def interpret_command(instruction: str) -> Action {
     );
 }
 
-# ---- Allow-list -----------------------------------------------------------
-# Master-prompt Section 9 rule: never execute an action just because the LLM
-# returned it. This check lives on the backend so a bad or hallucinated app
-# name gets caught here -- the phone app should ALSO check independently
-# before touching any OS automation API, not rely on this alone.
+# ---------------------------------------------------------------------------
+# Object-Spatial capability graph (master prompt Section 9).
+#
+# Each phone capability is a NODE with its own ability. The run_command WALKER
+# interprets the instruction into an Action, then traverses from root to the
+# capability node that handles that action type. The node validates the action
+# against its own rules before producing a result -- so the LLM never gets to
+# execute an action merely by naming it; a capability node has to accept it.
+# ---------------------------------------------------------------------------
+
 glob KNOWN_APPS: list[str] = ["Instagram", "Messages", "Phone", "Camera", "Settings"];
+
+# App-name aliases the model might emit -> canonical app in KNOWN_APPS.
+glob APP_ALIASES: dict[str, str] = {
+    "insta": "Instagram", "ig": "Instagram", "the gram": "Instagram",
+    "message": "Messages", "messaging": "Messages", "texts": "Messages", "sms": "Messages",
+    "dialer": "Phone", "call": "Phone", "calls": "Phone", "caller": "Phone",
+    "cam": "Camera", "photo": "Camera",
+    "setting": "Settings", "config": "Settings", "preferences": "Settings"
+};
+
+# Resolve a possibly-messy app name to a known app, else empty string.
+def canonical_app(name: str) -> str {
+    n = name.strip().lower();
+    if not n { return ""; }
+    for app in KNOWN_APPS {
+        if n == app.lower() { return app; }
+    }
+    if n in APP_ALIASES { return APP_ALIASES[n]; }
+    for app in KNOWN_APPS {
+        if app.lower() in n { return app; }
+    }
+    for alias in APP_ALIASES.keys() {
+        if alias in n { return APP_ALIASES[alias]; }
+    }
+    return "";
+}
+
+def make_result(type_: str, app: str, target: str, reason: str) -> dict {
+    return {"type": type_, "app_name": app, "target": target, "reason": reason};
+}
+
+# ---- Capability nodes -----------------------------------------------------
+# One node per phone capability. The router walker visits them; each walker
+# ability below is scoped to a node TYPE, so it only fires on its own node.
+
+node Capability {
+    has action_type: str;   # the ActionType this node answers for (metadata)
+    has label: str = "";
+}
+
+node AppLauncher(Capability) { has allowed: list[str] = []; }
+node HomeNav(Capability) {}
+node Notifications(Capability) {}
+node Unknown(Capability) {}
+
+# ---- Session state (persisted on the root) --------------------------------
+
+node Session {
+    has count: int = 0;
+    has history: list[dict] = [];
+}
+
+# ---- Router walker --------------------------------------------------------
+# Interprets the instruction, then traverses root -> capability nodes. Each
+# capability decides for itself whether it accepts the action (defense: the
+# LLM can't execute anything a node doesn't explicitly allow).
 
 walker:pub run_command {
     has instruction: str;
+    has decided: Action = Action(type=ActionType.UNKNOWN);
+    has answer: dict = {};
 
-    can interpret with Root entry {
-        action = interpret_command(self.instruction);
-
-        if action.type == ActionType.OPEN_APP and action.app_name not in KNOWN_APPS {
-            # LLM named an app outside the allow-list -- reject rather than execute.
-            report {
-                "type": "UNKNOWN",
-                "app_name": "",
-                "target": "",
-                "reason": f"'{action.app_name}' is not in the known app list"
-            };
-        } else {
-            report {"type": str(action.type), "app_name": action.app_name, "target": action.target};
+    can route with Root entry {
+        # Build the capability graph + session once, lazily, on this root.
+        if not [-->] {
+            here ++> AppLauncher(action_type="OPEN_APP", label="apps", allowed=KNOWN_APPS);
+            here ++> HomeNav(action_type="GO_HOME", label="home");
+            here ++> Notifications(action_type="READ_NOTIFICATIONS", label="notifications");
+            here ++> Unknown(action_type="UNKNOWN", label="fallback");
+            here ++> Session();
         }
+        self.decided = interpret_command(self.instruction);
+        visit [-->];
+    }
+
+    can at_apps with AppLauncher entry {
+        if self.decided.type == ActionType.OPEN_APP {
+            app = canonical_app(self.decided.app_name);
+            if app and (app in here.allowed) {
+                self.answer = make_result("OPEN_APP", app, self.decided.target, "");
+            } else {
+                self.answer = make_result(
+                    "UNKNOWN", "", "", f"'{self.decided.app_name}' is not an app I can open"
+                );
+            }
+        }
+    }
+
+    can at_home with HomeNav entry {
+        if self.decided.type == ActionType.GO_HOME {
+            self.answer = make_result("GO_HOME", "", "", "");
+        }
+    }
+
+    can at_notifications with Notifications entry {
+        if self.decided.type == ActionType.READ_NOTIFICATIONS {
+            self.answer = make_result("READ_NOTIFICATIONS", "", "", "");
+        }
+    }
+
+    can at_unknown with Unknown entry {
+        if self.decided.type == ActionType.UNKNOWN {
+            why = self.decided.target if self.decided.target else "I can't do that yet";
+            self.answer = make_result("UNKNOWN", "", "", why);
+        }
+    }
+
+    can at_session with Session entry {
+        here.count += 1;
+        if self.answer { here.history = (here.history + [self.answer])[-20:]; }
+    }
+
+    can respond with Root exit {
+        if not self.answer {
+            self.answer = make_result("UNKNOWN", "", "", "no capability handled this");
+        }
+        report self.answer;
     }
 }
