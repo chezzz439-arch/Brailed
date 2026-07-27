@@ -17,11 +17,25 @@ Run for real:
     # POST http://localhost:8000/walker/run_command  {"instruction": "..."}
 """
 
-import from byllm.lib { Model }
+import requests;
+import json;
 
-glob llm: Model = Model(model_name="claude-sonnet-4-6");
-# Model string current as of this writing -- check docs.claude.com if this
-# stops working, model names do change over time.
+# Local Llama via Ollama — no API key, runs on this machine. We call Ollama's
+# /api/chat directly with format="json": byLLM's own Ollama path was unreliable
+# (returned wrong actions + internal errors) whereas raw Ollama nails the
+# structured output. Point OLLAMA_* at any local model to swap.
+glob OLLAMA_URL: str = "http://localhost:11434/api/chat";
+glob OLLAMA_MODEL: str = "llama3.1:8b";
+glob SYSTEM_PROMPT: str =
+    "Map the instruction to ONE action. Output ONLY JSON: {\"action\":..., "
+    "\"app_name\":..., \"target\":...}. "
+    "action = OPEN_APP if the user wants to open/go to/launch an app; GO_HOME "
+    "for 'go home'/'home screen'; READ_NOTIFICATIONS for reading notifications; "
+    "otherwise UNKNOWN. "
+    "app_name = the EXACT app the user named (Instagram, Messages, Phone, "
+    "Camera, or Settings), else empty string. Never substitute a different app. "
+    "target = empty string unless the user explicitly named a screen/section. "
+    "Do not invent app_name or target.";
 
 enum ActionType { OPEN_APP, GO_HOME, READ_NOTIFICATIONS, UNKNOWN }
 sem ActionType.OPEN_APP = "Open a specific app, optionally navigating to a section/screen within it.";
@@ -38,9 +52,36 @@ sem Action.type = "Which kind of phone action this is.";
 sem Action.app_name = "The app to open, if type is OPEN_APP (e.g. 'Instagram', 'Messages'). Empty string otherwise.";
 sem Action.target = "A specific screen/section within the app, if the user mentioned one (e.g. 'home page', 'profile', 'camera'). Empty string if not specified.";
 
-def interpret_command(instruction: str) -> Action by llm();
-sem interpret_command = "Interpret a phone-control instruction typed in braille by a blind or deaf user, and map it to a structured phone action. If the instruction doesn't clearly match an available action, return UNKNOWN rather than guessing.";
-sem interpret_command.instruction = "The natural-language instruction the user typed, e.g. 'go to instagram at the home page'.";
+def interpret_command(instruction: str) -> Action {
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": instruction}
+        ],
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0.0}
+    };
+    data = {};
+    try {
+        resp = requests.post(OLLAMA_URL, json=payload, timeout=30);
+        data = json.loads(resp.json()["message"]["content"]);
+    } except Exception as e {
+        return Action(type=ActionType.UNKNOWN, target=f"LLM error: {e}");
+    }
+
+    at = str(data.get("action", "UNKNOWN"));
+    type_ = ActionType.UNKNOWN;
+    if at == "OPEN_APP" { type_ = ActionType.OPEN_APP; }
+    elif at == "GO_HOME" { type_ = ActionType.GO_HOME; }
+    elif at == "READ_NOTIFICATIONS" { type_ = ActionType.READ_NOTIFICATIONS; }
+    return Action(
+        type=type_,
+        app_name=str(data.get("app_name", "")),
+        target=str(data.get("target", ""))
+    );
+}
 
 # ---- Allow-list -----------------------------------------------------------
 # Master-prompt Section 9 rule: never execute an action just because the LLM
