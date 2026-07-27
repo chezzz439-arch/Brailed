@@ -41,10 +41,11 @@
 
 // ---------------------------------------------------------------------------
 // Hardware pinout — AUTHORITATIVE (sensors are soldered in place).
-//   dot1..dot6 -> GPIO 4,16,17,18,19,23   Send -> GPIO 25 (INPUT_PULLUP, to GND)
+//   dot1..dot6 -> GPIO 4,16,17,19,18,23   Send -> GPIO 25 (INPUT_PULLUP, to GND)
+//   (dot4 and dot5 swapped vs original wiring: dot4=GPIO19, dot5=GPIO18)
 //   OLED SSD1306 128x64 -> SDA 21, SCL 22, addr 0x3C
 // ---------------------------------------------------------------------------
-static const uint8_t PIN_DOT[6] = {4, 16, 17, 18, 19, 23};  // bit0=dot1 .. bit5=dot6
+static const uint8_t PIN_DOT[6] = {4, 16, 17, 19, 18, 23};  // bit0=dot1 .. bit5=dot6
 static const uint8_t PIN_SEND   = 25;
 
 static const uint8_t PIN_SDA = 21;
