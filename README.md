@@ -77,10 +77,6 @@ A more detailed technical spec — braille encoding tables, BLE characteristic d
 
 Early-stage / hackathon build. Core loops (typing, captioning, agentic commands) are being built and tested independently before full integration — see Build instructions above for current stage.
 
-## Acknowledgments
-
-Inspired by Adil Jussupov's Portable Braille (TreeHacks 2025, NVIDIA Robo Prize + Grand Prize 3rd Place).
-
 ## License
 
-Add your chosen license here (e.g. MIT, Apache 2.0) — not set yet.
+ (e.g. MIT, Apache 2.0)
